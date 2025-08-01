@@ -40,11 +40,8 @@ def get_city_info(city_label):
             area_id = int(data[0]['osm_id']) + 3600000000
             lat, lon = float(data[0]['lat']), float(data[0]['lon'])
             return lat, lon, area_id
-    except requests.exceptions.RequestException as e:
-        st.sidebar.error(f"Erreur réseau (géolocalisation) : {e}")
-    except (KeyError, IndexError):
-        st.sidebar.warning(f"Aucune donnée administrative trouvée pour {city_label}.")
-    return None, None, None
+    except Exception:
+        return None, None, None
 
 @st.cache_data
 def get_osm_elements_by_area(area_id, amenities_to_search):
@@ -66,22 +63,52 @@ st.sidebar.title("OpenStatsMap 🗺️")
 if df_communes is None:
     st.stop()
 
-osm_amenities = {
-    "🎠 Aires de jeux": {"key": "leisure", "value": "playground", "icon": "child", "color": "orange"},
-    "🪑 Bancs publics": {"key": "amenity", "value": "bench", "icon": "square-o", "color": "green"},
-    "📷 Caméras": {"key": "man_made", "value": "surveillance", "icon": "video-camera", "color": "red"},
-    "💧 Fontaines à boire": {"key": "amenity", "value": "drinking_water", "icon": "tint", "color": "blue"},
-    "🌳 Parcs & Jardins": {"key": "leisure", "value": "park", "icon": "tree", "color": "darkgreen"},
-    "🚲 Parkings à vélos": {"key": "amenity", "value": "bicycle_parking", "icon": "bicycle", "color": "purple"},
-    "⚕️ Pharmacies": {"key": "amenity", "value": "pharmacy", "icon": "plus-square", "color": "cadetblue"},
-    "🗑️ Poubelles": {"key": "amenity", "value": "waste_basket", "icon": "trash", "color": "darkred"},
-    "⚽ Terrains de sport": {"key": "leisure", "value": "pitch", "icon": "futbol-o", "color": "black"},
-    "⛲ Toilettes publiques": {"key": "amenity", "value": "toilets", "icon": "toilet", "color": "blue"},
+# **MODIFICATION MAJEURE** : Création d'un dictionnaire de catégories
+amenities_categories = {
+    "Vie Quotidienne 🌳": {
+        "🪑 Bancs publics": {"key": "amenity", "value": "bench"},
+        "🗑️ Poubelles": {"key": "amenity", "value": "waste_basket"},
+        "📮 Boîtes aux lettres": {"key": "amenity", "value": "post_box"},
+        "💧 Fontaines à boire": {"key": "amenity", "value": "drinking_water"},
+        "⛲ Toilettes publiques": {"key": "amenity", "value": "toilets"},
+    },
+    "Loisirs & Culture 🎭": {
+        "🎠 Aires de jeux": {"key": "leisure", "value": "playground"},
+        "🌳 Parcs & Jardins": {"key": "leisure", "value": "park"},
+        "⚽ Terrains de sport": {"key": "leisure", "value": "pitch"},
+        "🏀 Centres sportifs": {"key": "leisure", "value": "sports_centre"},
+        "🎨 Centres artistiques": {"key": "amenity", "value": "arts_centre"},
+        "🎬 Cinémas": {"key": "amenity", "value": "cinema"},
+        "📚 Bibliothèques": {"key": "amenity", "value": "library"},
+        "🏛️ Musées": {"key": "tourism", "value": "museum"},
+    },
+    "Commerces & Services 🛒": {
+        "🏧 Distributeurs de billets": {"key": "amenity", "value": "atm"},
+        "🏦 Banques": {"key": "amenity", "value": "bank"},
+        "⚕️ Pharmacies": {"key": "amenity", "value": "pharmacy"},
+        "🛒 Supermarchés": {"key": "shop", "value": "supermarket"},
+        "🥐 Boulangeries": {"key": "shop", "value": "bakery"},
+        "☕ Cafés": {"key": "amenity", "value": "cafe"},
+        "🍴 Restaurants": {"key": "amenity", "value": "restaurant"},
+    },
+    "Transport 🚌": {
+        "🚲 Parkings à vélos": {"key": "amenity", "value": "bicycle_parking"},
+        "🅿️ Parkings": {"key": "amenity", "value": "parking"},
+        "⛽ Stations-service": {"key": "amenity", "value": "fuel"},
+        "⚡ Bornes de recharge": {"key": "amenity", "value": "charging_station"},
+    },
+    "Sécurité & Urgence 🛡️": {
+        "📷 Caméras de surveillance": {"key": "man_made", "value": "surveillance"},
+        "🚨 Postes de police": {"key": "amenity", "value": "police"},
+        "🔥 Bouches d'incendie": {"key": "emergency", "value": "fire_hydrant"},
+    }
 }
+
+# On crée un dictionnaire plat pour un accès facile aux détails des tags plus tard
+all_amenities = {name: details for category in amenities_categories.values() for name, details in category.items()}
 
 # --- Interface Utilisateur ---
 st.sidebar.header("Configuration", divider='rainbow')
-# ... (partie interface inchangée)
 search_mode = st.sidebar.radio("Mode de recherche :", ["Nom de ville", "Département", "Code Postal"])
 
 options_villes = []
@@ -95,23 +122,28 @@ else:
     if code_postal:
         options_villes = df_communes[df_communes['code_postal'].str.startswith(code_postal)]['label']
 
-if 'selected_cities' not in st.session_state: st.session_state.selected_cities = []
-if 'selected_amenities' not in st.session_state: st.session_state.selected_amenities = ["🪑 Bancs publics"]
+st.session_state.selected_cities = st.sidebar.multiselect("1. Choisissez des villes :", options=sorted(options_villes), default=st.session_state.get('selected_cities', []))
 
-st.session_state.selected_cities = st.sidebar.multiselect("1. Choisissez des villes :", options=sorted(options_villes), default=st.session_state.selected_cities)
-st.session_state.selected_amenities = st.sidebar.multiselect("2. Cochez les équipements :", options=list(osm_amenities.keys()), default=st.session_state.selected_amenities)
+st.sidebar.subheader("2. Cochez les équipements :")
+selected_amenities_names = []
+# **MODIFICATION** : Utilisation des expanders pour les catégories
+for category_name, amenities in amenities_categories.items():
+    with st.sidebar.expander(category_name):
+        for amenity_name in amenities.keys():
+            if st.checkbox(amenity_name, key=f"amenity_{amenity_name}"):
+                selected_amenities_names.append(amenity_name)
 
 # --- Logique principale ---
-if not st.session_state.selected_cities or not st.session_state.selected_amenities:
+if not st.session_state.selected_cities or not selected_amenities_names:
     st.info("👋 Bienvenue ! Configurez votre recherche dans le menu de gauche pour commencer.")
 else:
     all_cities_data = []
     total_elements_for_map = []
-    amenities_to_search = {name: osm_amenities[name] for name in st.session_state.selected_amenities}
+    amenities_to_search = {name: all_amenities[name] for name in selected_amenities_names}
 
     for city_name in st.session_state.selected_cities:
         with st.spinner(f"Analyse de {city_name}..."):
-            city_info_from_file = df_communes[df_communes['label'] == city_name].iloc[0]
+            city_info_from_file = df_communes.loc[df_communes['label'] == city_name].iloc[0]
             population = int(city_info_from_file.get('population', 0))
             lat, lon, area_id = get_city_info(city_name)
             
@@ -140,42 +172,40 @@ else:
 
         if display_mode == "Total":
             suffix, title = "_total", "Nombre total d'équipements"
-            df_view = df_results[[f"{name}_total" for name in st.session_state.selected_amenities]].astype(int)
+            df_view = df_results[[f"{name}_total" for name in selected_amenities_names]].astype(int)
         elif display_mode == "Ratio / 1 000 hab.":
             suffix, title = "_ratio1k", "Ratio pour 1 000 habitants"
-            df_view = df_results[[f"{name}_ratio1k" for name in st.session_state.selected_amenities]].round(2)
+            df_view = df_results[[f"{name}_ratio1k" for name in selected_amenities_names]].round(2)
         else:
             suffix, title = "_ratio10k", "Ratio pour 10 000 habitants"
-            df_view = df_results[[f"{name}_ratio10k" for name in st.session_state.selected_amenities]].round(2)
+            df_view = df_results[[f"{name}_ratio10k" for name in selected_amenities_names]].round(2)
 
-        # **MODIFICATION ICI** : On construit le nouveau nom de colonne avec le tag
         new_columns = []
         for name in df_view.columns:
             clean_name = name.replace(suffix, '')
-            tag_info = osm_amenities[clean_name]
+            tag_info = all_amenities[clean_name]
             new_columns.append(f"{clean_name} (`{tag_info['key']}={tag_info['value']}`)")
         df_view.columns = new_columns
-
+        
         df_display = df_results[['Population']].join(df_view)
         
         st.subheader(title)
         st.dataframe(df_display, use_container_width=True)
         st.bar_chart(df_view)
 
-        # --- Carte interactive ---
+        # Carte
         st.header("🗺️ Carte interactive des équipements")
-        # ... (partie carte inchangée)
         map_center_lat, map_center_lon, _ = get_city_info(st.session_state.selected_cities[0])
         if map_center_lat and map_center_lon:
             m = folium.Map(location=[map_center_lat, map_center_lon], zoom_start=12)
-            marker_clusters = {name: MarkerCluster().add_to(m) for name in st.session_state.selected_amenities}
+            marker_clusters = {name: MarkerCluster().add_to(m) for name in selected_amenities_names}
             for el in total_elements_for_map:
                 if 'lat' in el and 'lon' in el:
                     amenity_name = el['amenity_name']
-                    style = osm_amenities[amenity_name]
+                    style = all_amenities[amenity_name]
                     folium.Marker(
                         location=[el['lat'], el['lon']],
                         tooltip=amenity_name.split(" ")[1],
-                        icon=folium.Icon(color=style['color'], icon=style['icon'], prefix='fa')
+                        icon=folium.Icon(color=style.get('color', 'blue'), icon=style.get('icon', 'info-sign'), prefix='fa')
                     ).add_to(marker_clusters[amenity_name])
             st_folium(m, use_container_width=True, height=500)
