@@ -1,6 +1,6 @@
-# 🌆 CityRanker
+# 🌆 OpenStatsMap
 
-**CityRanker** est une application interactive développée avec Streamlit permettant de **classer les villes** selon leur **nombre d’équipements publics par habitant** (toilettes, bancs, parcs, etc.).  
+**OpenStatsMap** est une application interactive développée avec Streamlit permettant de **classer les villes** selon leur **nombre d’équipements publics par habitant** (toilettes, bancs, parcs, etc.).  
 Les données sont extraites en temps réel depuis **OpenStreetMap** grâce à l’API **Overpass**.
 
 ---
